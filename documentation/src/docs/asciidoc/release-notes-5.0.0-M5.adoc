@@ -24,9 +24,24 @@ on GitHub.
 
 * The deprecated `--hide-details` option of the `ConsoleLauncher` has been removed; use
   `--details none` instead.
+* The following previously deprecated methods have been removed.
+  - `junit-platform-engine`: `Node.execute(EngineExecutionContext)`
+  - `junit-platform-commons`: `ReflectionUtils.findAllClassesInClasspathRoot(Path, Predicate, Predicate)`
+* The `junit-platform-surefire-provider` now requires `maven-surefire-plugin` version
+  2.20 or higher.
 
 ===== New Features and Improvements
 
+* When using `DiscoverySelectors` to select a method by its _fully qualified method name_
+  or by providing `methodParameterTypes` as a comma-separated string, it is now possible
+  to describe array parameter types using _source code syntax_ such as `int[]` for a
+  primitive array and `java.lang.String[]` for an object array. Furthermore, it is now
+  possible to describe multidimensional array types using either the JVM's internal String
+  representation (e.g., `[[[I` for `int[][][]`, `[[Ljava.lang.String;` for
+  `java.lang.String[][]`, etc.) or _source code syntax_ (e.g., `boolean[][][]`,
+  `java.lang.Double[][]`, etc.).
+* The JUnit Platform Gradle plugin task `junitPlatformTest` can now be accessed
+  directly during the configuration phase of a build.
 * When a `TestEngine` is discovered via Java's `ServiceLoader` mechanism, an attempt
   will now be made to determine the location from which the engine class was loaded,
   and if the location URL is available, it will be logged at configuration-level.
@@ -65,7 +80,12 @@ on GitHub.
 
 ===== New Features and Improvements
 
-* ❓
+* `Assertions.assertAll()` now tracks exceptions of any type (as opposed to only tracking
+  exceptions of type `AssertionError`), unless the exception is a _blacklisted_ exception
+  in which case it will be immediately rethrown.
+* If a `@ParameterizedTest` accepts an array as an argument, the string representation of
+  the array will now be converted to a human readable format when generating the display
+  name for invocations of the parameterized test.
 
 
 [[release-notes-5.0.0-m5-junit-vintage]]

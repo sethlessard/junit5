@@ -93,50 +93,123 @@ public final class ReflectionUtils {
 	// Pattern: [fully qualified class name]#[methodName]((comma-separated list of parameter type names))
 	private static final Pattern FULLY_QUALIFIED_METHOD_NAME_PATTERN = Pattern.compile("(.+)#([^()]+?)(\\((.*)\\))?");
 
+	// Pattern: "[Ljava.lang.String;", "[[[[Ljava.lang.String;", etc.
+	private static final Pattern VM_INTERNAL_OBJECT_ARRAY_PATTERN = Pattern.compile("^(\\[+)L(.+);$");
+
+	/**
+	 * Pattern: "[x", "[[[[x", etc., where x is Z, B, C, D, F, I, J, S, etc.
+	 *
+	 * <p>The pattern intentionally captures the last bracket with the
+	 * capital letter so that the combination can be looked up via
+	 * {@link #classNameToTypeMap}. For example, the last matched group
+	 * will contain {@code "[I"} instead of simply {@code "I"}.
+	 *
+	 * @see Class#getName()
+	 */
+	private static final Pattern VM_INTERNAL_PRIMITIVE_ARRAY_PATTERN = //
+		Pattern.compile("^(\\[+)(\\[[Z,B,C,D,F,I,J,S])$");
+
+	// Pattern: "java.lang.String[]", "int[]", "int[][][][]", etc.
+	private static final Pattern SOURCE_CODE_SYNTAX_ARRAY_PATTERN = Pattern.compile("^([^\\[\\]]+)((\\[\\])+)+$");
+
 	private static final Class<?>[] EMPTY_CLASS_ARRAY = new Class<?>[0];
 
 	private static final ClasspathScanner classpathScanner = new ClasspathScanner(
 		ClassLoaderUtils::getDefaultClassLoader, ReflectionUtils::loadClass);
 
-	private static final Map<String, Class<?>> primitiveNameToTypeMap;
+	/**
+	 * Internal cache of common class names mapped to their types.
+	 */
+	private static final Map<String, Class<?>> classNameToTypeMap;
 
+	/**
+	 * Internal cache of primitive types mapped to their wrapper types.
+	 */
 	private static final Map<Class<?>, Class<?>> primitiveToWrapperMap;
 
 	static {
-		Map<String, Class<?>> primitiveTypes = new HashMap<>(16);
+		// @formatter:off
+		List<Class<?>> commonTypes = Arrays.asList(
+			boolean.class,
+			byte.class,
+			char.class,
+			short.class,
+			int.class,
+			long.class,
+			float.class,
+			double.class,
 
-		primitiveTypes.put(boolean.class.getName(), boolean.class);
-		primitiveTypes.put(byte.class.getName(), byte.class);
-		primitiveTypes.put(char.class.getName(), char.class);
-		primitiveTypes.put(short.class.getName(), short.class);
-		primitiveTypes.put(int.class.getName(), int.class);
-		primitiveTypes.put(long.class.getName(), long.class);
-		primitiveTypes.put(float.class.getName(), float.class);
-		primitiveTypes.put(double.class.getName(), double.class);
+			boolean[].class,
+			byte[].class,
+			char[].class,
+			short[].class,
+			int[].class,
+			long[].class,
+			float[].class,
+			double[].class,
 
-		primitiveTypes.put(boolean[].class.getName(), boolean[].class);
-		primitiveTypes.put(byte[].class.getName(), byte[].class);
-		primitiveTypes.put(char[].class.getName(), char[].class);
-		primitiveTypes.put(short[].class.getName(), short[].class);
-		primitiveTypes.put(int[].class.getName(), int[].class);
-		primitiveTypes.put(long[].class.getName(), long[].class);
-		primitiveTypes.put(float[].class.getName(), float[].class);
-		primitiveTypes.put(double[].class.getName(), double[].class);
+			boolean[][].class,
+			byte[][].class,
+			char[][].class,
+			short[][].class,
+			int[][].class,
+			long[][].class,
+			float[][].class,
+			double[][].class,
 
-		primitiveNameToTypeMap = Collections.unmodifiableMap(primitiveTypes);
+			Boolean.class,
+			Byte.class,
+			Character.class,
+			Short.class,
+			Integer.class,
+			Long.class,
+			Float.class,
+			Double.class,
+			String.class,
 
-		Map<Class<?>, Class<?>> primitiveToWrapper = new HashMap<>(8);
+			Boolean[].class,
+			Byte[].class,
+			Character[].class,
+			Short[].class,
+			Integer[].class,
+			Long[].class,
+			Float[].class,
+			Double[].class,
+			String[].class,
 
-		primitiveToWrapper.put(boolean.class, Boolean.class);
-		primitiveToWrapper.put(byte.class, Byte.class);
-		primitiveToWrapper.put(char.class, Character.class);
-		primitiveToWrapper.put(short.class, Short.class);
-		primitiveToWrapper.put(int.class, Integer.class);
-		primitiveToWrapper.put(long.class, Long.class);
-		primitiveToWrapper.put(float.class, Float.class);
-		primitiveToWrapper.put(double.class, Double.class);
+			Boolean[][].class,
+			Byte[][].class,
+			Character[][].class,
+			Short[][].class,
+			Integer[][].class,
+			Long[][].class,
+			Float[][].class,
+			Double[][].class,
+			String[][].class
+		);
+		// @formatter:on
 
-		primitiveToWrapperMap = Collections.unmodifiableMap(primitiveToWrapper);
+		Map<String, Class<?>> classNamesToTypes = new HashMap<>(64);
+
+		commonTypes.forEach(type -> {
+			classNamesToTypes.put(type.getName(), type);
+			classNamesToTypes.put(type.getCanonicalName(), type);
+		});
+
+		classNameToTypeMap = Collections.unmodifiableMap(classNamesToTypes);
+
+		Map<Class<?>, Class<?>> primitivesToWrappers = new HashMap<>(8);
+
+		primitivesToWrappers.put(boolean.class, Boolean.class);
+		primitivesToWrappers.put(byte.class, Byte.class);
+		primitivesToWrappers.put(char.class, Character.class);
+		primitivesToWrappers.put(short.class, Short.class);
+		primitivesToWrappers.put(int.class, Integer.class);
+		primitivesToWrappers.put(long.class, Long.class);
+		primitivesToWrappers.put(float.class, Float.class);
+		primitivesToWrappers.put(double.class, Double.class);
+
+		primitiveToWrapperMap = Collections.unmodifiableMap(primitivesToWrappers);
 	}
 
 	public static boolean isPublic(Class<?> clazz) {
@@ -308,9 +381,13 @@ public final class ReflectionUtils {
 	}
 
 	/**
-	 * Load a class by its <em>fully qualified name</em>.
-	 * @param name the fully qualified name of the class to load; never
-	 * {@code null} or blank
+	 * Load a class by its <em>primitive name</em> or <em>fully qualified name</em>,
+	 * using the default {@link ClassLoader}.
+	 *
+	 * <p>See {@link #loadClass(String, ClassLoader)} for details on support for
+	 * class names for arrays.
+	 *
+	 * @param name the name of the class to load; never {@code null} or blank
 	 * @see #loadClass(String, ClassLoader)
 	 */
 	public static Optional<Class<?>> loadClass(String name) {
@@ -318,34 +395,79 @@ public final class ReflectionUtils {
 	}
 
 	/**
-	 * Load a class by its <em>fully qualified name</em>, using the supplied
-	 * {@link ClassLoader}.
-	 * @param name the fully qualified name of the class to load; never
-	 * {@code null} or blank
+	 * Load a class by its <em>primitive name</em> or <em>fully qualified name</em>,
+	 * using the supplied {@link ClassLoader}.
+	 *
+	 * <p>Class names for arrays may be specified using either the JVM's internal
+	 * String representation (e.g., {@code [[I} for {@code int[][]},
+	 * {@code [Lava.lang.String;} for {@code java.lang.String[]}, etc.) or
+	 * <em>source code syntax</em> (e.g., {@code int[][]}, {@code java.lang.String[]},
+	 * etc.).
+	 *
+	 * @param name the name of the class to load; never {@code null} or blank
 	 * @param classLoader the {@code ClassLoader} to use; never {@code null}
 	 * @see #loadClass(String)
 	 */
 	public static Optional<Class<?>> loadClass(String name, ClassLoader classLoader) {
-		Preconditions.notBlank(name, "class name must not be null or blank");
+		Preconditions.notBlank(name, "Class name must not be null or blank");
 		Preconditions.notNull(classLoader, "ClassLoader must not be null");
 		name = name.trim();
 
-		if (primitiveNameToTypeMap.containsKey(name)) {
-			return Optional.of(primitiveNameToTypeMap.get(name));
+		if (classNameToTypeMap.containsKey(name)) {
+			return Optional.of(classNameToTypeMap.get(name));
 		}
 
 		try {
-			// Object array such as: [Ljava.lang.String;
-			if (name.startsWith("[L") && name.endsWith(";")) {
-				Class<?> componentType = classLoader.loadClass(name.substring(2, name.length() - 1));
-				return Optional.of(Array.newInstance(componentType, 0).getClass());
+			Matcher matcher;
+
+			// Primitive arrays such as "[I", "[[[[D", etc.
+			matcher = VM_INTERNAL_PRIMITIVE_ARRAY_PATTERN.matcher(name);
+			if (matcher.matches()) {
+				String brackets = matcher.group(1);
+				String componentTypeName = matcher.group(2);
+				// Calculate dimensions by counting brackets.
+				int dimensions = brackets.length();
+
+				return loadArrayType(classLoader, componentTypeName, dimensions);
 			}
 
+			// Object arrays such as "[Ljava.lang.String;", "[[[[Ljava.lang.String;", etc.
+			matcher = VM_INTERNAL_OBJECT_ARRAY_PATTERN.matcher(name);
+			if (matcher.matches()) {
+				String brackets = matcher.group(1);
+				String componentTypeName = matcher.group(2);
+				// Calculate dimensions by counting brackets.
+				int dimensions = brackets.length();
+
+				return loadArrayType(classLoader, componentTypeName, dimensions);
+			}
+
+			// Arrays such as "java.lang.String[]", "int[]", "int[][][][]", etc.
+			matcher = SOURCE_CODE_SYNTAX_ARRAY_PATTERN.matcher(name);
+			if (matcher.matches()) {
+				String componentTypeName = matcher.group(1);
+				String bracketPairs = matcher.group(2);
+				// Calculate dimensions by counting bracket pairs.
+				int dimensions = bracketPairs.length() / 2;
+
+				return loadArrayType(classLoader, componentTypeName, dimensions);
+			}
+
+			// Fallback to standard VM class loading
 			return Optional.of(classLoader.loadClass(name));
 		}
 		catch (ClassNotFoundException ex) {
 			return Optional.empty();
 		}
+	}
+
+	private static Optional<Class<?>> loadArrayType(ClassLoader classLoader, String componentTypeName, int dimensions)
+			throws ClassNotFoundException {
+
+		Class<?> componentType = classNameToTypeMap.containsKey(componentTypeName)
+				? classNameToTypeMap.get(componentTypeName) : classLoader.loadClass(componentTypeName);
+
+		return Optional.of(Array.newInstance(componentType, new int[dimensions]).getClass());
 	}
 
 	/**
@@ -356,29 +478,41 @@ public final class ReflectionUtils {
 	 * <ul>
 	 * <li>{@code [fully qualified class name]#[methodName]}</li>
 	 * <li>{@code [fully qualified class name]#[methodName](parameter type list)}
-	 * <ul><li>The <em>parameter type list</em> is a comma-separated list of
-	 * fully qualified class names for the types of parameters accepted by
-	 * the method.</li></ul>
-	 * </li>
 	 * </ul>
+	 *
+	 * <p>The <em>parameter type list</em> is a comma-separated list of primitive
+	 * names or fully qualified class names for the types of parameters accepted
+	 * by the method.
+	 *
+	 * <p>See {@link #loadClass(String, ClassLoader)} for details on the supported
+	 * syntax for array parameter types.
 	 *
 	 * <h3>Examples</h3>
 	 *
 	 * <table border="1">
 	 * <tr><th>Method</th><th>Fully Qualified Method Name</th></tr>
-	 * <tr><td>{@link String#chars()}</td><td>{@code java.lang.String#chars}</td></tr>
-	 * <tr><td>{@link String#chars()}</td><td>{@code java.lang.String#chars()}</td></tr>
-	 * <tr><td>{@link String#equalsIgnoreCase(String)}</td><td>{@code java.lang.String#equalsIgnoreCase(java.lang.String)}</td></tr>
-	 * <tr><td>{@link String#substring(int, int)}</td><td>{@code java.lang.String#substring(int, int)}</td></tr>
+	 * <tr><td>{@code java.lang.String.chars()}</td><td>{@code java.lang.String#chars}</td></tr>
+	 * <tr><td>{@code java.lang.String.chars()}</td><td>{@code java.lang.String#chars()}</td></tr>
+	 * <tr><td>{@code java.lang.String.equalsIgnoreCase(String)}</td><td>{@code java.lang.String#equalsIgnoreCase(java.lang.String)}</td></tr>
+	 * <tr><td>{@code java.lang.String.substring(int, int)}</td><td>{@code java.lang.String#substring(int, int)}</td></tr>
+	 * <tr><td>{@code example.Calc.avg(int[])}</td><td>{@code example.Calc#avg([I)}</td></tr>
+	 * <tr><td>{@code example.Calc.avg(int[])}</td><td>{@code example.Calc#avg(int[])}</td></tr>
+	 * <tr><td>{@code example.Matrix.multiply(double[][])}</td><td>{@code example.Matrix#multiply([[D)}</td></tr>
+	 * <tr><td>{@code example.Matrix.multiply(double[][])}</td><td>{@code example.Matrix#multiply(double[][])}</td></tr>
+	 * <tr><td>{@code example.Service.process(String[])}</td><td>{@code example.Service#process([Ljava.lang.String;)}</td></tr>
+	 * <tr><td>{@code example.Service.process(String[])}</td><td>{@code example.Service#process(java.lang.String[])}</td></tr>
+	 * <tr><td>{@code example.Service.process(String[][])}</td><td>{@code example.Service#process([[Ljava.lang.String;)}</td></tr>
+	 * <tr><td>{@code example.Service.process(String[][])}</td><td>{@code example.Service#process(java.lang.String[][])}</td></tr>
 	 * </table>
 	 *
 	 * @param fullyQualifiedMethodName the fully qualified name of the method to load;
 	 * never {@code null} or blank
 	 * @return an {@code Optional} containing the method; never {@code null} but
 	 * potentially empty
+	 * @see #getFullyQualifiedMethodName(Class, String, Class...)
 	 */
 	public static Optional<Method> loadMethod(String fullyQualifiedMethodName) {
-		Preconditions.notBlank(fullyQualifiedMethodName, "fully qualified method name must not be null or blank");
+		Preconditions.notBlank(fullyQualifiedMethodName, "Fully qualified method name must not be null or blank");
 
 		String fqmn = fullyQualifiedMethodName.trim();
 		Matcher matcher = FULLY_QUALIFIED_METHOD_NAME_PATTERN.matcher(fqmn);
@@ -407,20 +541,23 @@ public final class ReflectionUtils {
 	}
 
 	/**
-	 * Build the <em>fully qualified name</em> of the passed parameters.
+	 * Build the <em>fully qualified method name</em> for the method described by the
+	 * supplied class, method name, and parameter types.
+	 *
+	 * <p>See {@link #loadMethod(String)} for details on the format.
 	 *
 	 * @param clazz the class that declares the method; never {@code null}
-	 * @param methodName the name of the method; never {@code null}
+	 * @param methodName the name of the method; never {@code null} or blank
 	 * @param params the parameter types of the method; may be {@code null} or empty
 	 * @return fully qualified method name; never {@code null}
 	 * @see #loadMethod(String)
 	 */
 	public static String getFullyQualifiedMethodName(Class<?> clazz, String methodName, Class<?>... params) {
-		Preconditions.notNull(clazz, "clazz must not be null");
-		Preconditions.notNull(methodName, "methodName must not be null");
+		Preconditions.notNull(clazz, "Class must not be null");
+		Preconditions.notBlank(methodName, "Method name must not be null or blank");
 		Preconditions.notNull(params, "params must not be null");
 
-		return String.format("%s#%s(%s)", clazz.getName(), methodName, StringUtils.nullSafeToString(params));
+		return String.format("%s#%s(%s)", clazz.getName(), methodName, ClassUtils.nullSafeToString(params));
 	}
 
 	private static Optional<Object> getOuterInstance(Object inner) {
@@ -458,19 +595,6 @@ public final class ReflectionUtils {
 		return Optional.empty();
 	}
 
-	/**
-	 * Determine if the supplied package name refers to a package that is present
-	 * in the classpath.
-	 *
-	 * <p>The default package is represented by an empty string ({@code ""}).
-	 *
-	 * @param packageName the package name to check; never {@code null} and never
-	 * containing whitespace only
-	 */
-	public static boolean isPackage(String packageName) {
-		return classpathScanner.isPackage(packageName);
-	}
-
 	public static Set<Path> getAllClasspathRootDirectories() {
 		// This is quite a hack, since sometimes the classpath is quite different
 		String fullClassPath = System.getProperty("java.class.path");
@@ -480,15 +604,6 @@ public final class ReflectionUtils {
 				.filter(Files::isDirectory)
 				.collect(toSet());
 		// @formatter:on
-	}
-
-	/**
-	 * @deprecated Use {@link #findAllClassesInClasspathRoot(URI, Predicate, Predicate)} instead.
-	 */
-	@Deprecated
-	public static List<Class<?>> findAllClassesInClasspathRoot(Path root, Predicate<Class<?>> classTester,
-			Predicate<String> classNameFilter) {
-		return findAllClassesInClasspathRoot(root.toUri(), classTester, classNameFilter);
 	}
 
 	/**
@@ -562,7 +677,7 @@ public final class ReflectionUtils {
 
 	public static Optional<Method> getMethod(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
 		Preconditions.notNull(clazz, "Class must not be null");
-		Preconditions.notBlank(methodName, "method name must not be null or empty");
+		Preconditions.notBlank(methodName, "Method name must not be null or blank");
 
 		try {
 			return Optional.ofNullable(clazz.getMethod(methodName, parameterTypes));
@@ -631,7 +746,7 @@ public final class ReflectionUtils {
 	 */
 	public static Optional<Method> findMethod(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
 		Preconditions.notNull(clazz, "Class must not be null");
-		Preconditions.notBlank(methodName, "method name must not be null or empty");
+		Preconditions.notBlank(methodName, "Method name must not be null or blank");
 
 		Predicate<Method> nameAndParameterTypesMatch = (method -> method.getName().equals(methodName)
 				&& Arrays.equals(method.getParameterTypes(), parameterTypes));
@@ -726,7 +841,7 @@ public final class ReflectionUtils {
 	 */
 	public static <T> Optional<Object> readFieldValue(Class<T> clazz, String fieldName, T instance) {
 		Preconditions.notNull(clazz, "Class must not be null");
-		Preconditions.notBlank(fieldName, "fieldName must not be null or empty");
+		Preconditions.notBlank(fieldName, "Field name must not be null or blank");
 
 		try {
 			Field field = makeAccessible(clazz.getDeclaredField(fieldName));

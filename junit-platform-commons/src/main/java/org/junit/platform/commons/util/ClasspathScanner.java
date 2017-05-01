@@ -52,7 +52,6 @@ class ClasspathScanner {
 
 	private static final Logger LOG = Logger.getLogger(ClasspathScanner.class.getName());
 
-	private static final String DEFAULT_PACKAGE_NAME = "";
 	private static final char CLASSPATH_RESOURCE_PATH_SEPARATOR = '/';
 	private static final char PACKAGE_SEPARATOR_CHAR = '.';
 	private static final String PACKAGE_SEPARATOR_STRING = String.valueOf(PACKAGE_SEPARATOR_CHAR);
@@ -71,21 +70,10 @@ class ClasspathScanner {
 		this.loadClass = loadClass;
 	}
 
-	boolean isPackage(String packageName) {
-		assertPackageNameIsPlausible(packageName);
-
-		try {
-			return packageName.isEmpty() // default package
-					|| getClassLoader().getResources(packagePath(packageName.trim())).hasMoreElements();
-		}
-		catch (Exception ex) {
-			return false;
-		}
-	}
-
 	List<Class<?>> scanForClassesInPackage(String basePackageName, Predicate<Class<?>> classFilter,
 			Predicate<String> classNameFilter) {
-		assertPackageNameIsPlausible(basePackageName);
+
+		PackageUtils.assertPackageNameIsValid(basePackageName);
 		Preconditions.notNull(classFilter, "classFilter must not be null");
 		Preconditions.notNull(classNameFilter, "classNameFilter must not be null");
 		basePackageName = basePackageName.trim();
@@ -100,7 +88,7 @@ class ClasspathScanner {
 		Preconditions.notNull(classFilter, "classFilter must not be null");
 		Preconditions.notNull(classNameFilter, "classNameFilter must not be null");
 
-		return findClassesForUri(root, DEFAULT_PACKAGE_NAME, classFilter, classNameFilter);
+		return findClassesForUri(root, PackageUtils.DEFAULT_PACKAGE_NAME, classFilter, classNameFilter);
 	}
 
 	/**
@@ -234,12 +222,6 @@ class ClasspathScanner {
 
 	private ClassLoader getClassLoader() {
 		return this.classLoaderSupplier.get();
-	}
-
-	private static void assertPackageNameIsPlausible(String packageName) {
-		Preconditions.notNull(packageName, "package name must not be null");
-		Preconditions.condition(DEFAULT_PACKAGE_NAME.equals(packageName) || StringUtils.isNotBlank(packageName),
-			"package name must not contain only whitespace");
 	}
 
 	private static String packagePath(String packageName) {
